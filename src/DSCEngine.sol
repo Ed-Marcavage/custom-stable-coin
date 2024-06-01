@@ -48,5 +48,85 @@ import {DecentralizedStableCoin} from "./DecentralizedStableCoin.sol";
  * @notice This contract is based on the MakerDAO DSS system
  */
 contract DSCEngine is ReentrancyGuard {
+    ///////////////////
+    // Errors ///////
+    ///////////////////
+    error DSCEngine__NeedsMoreThanZero();
+    error DSCEngine__TokenNotAllowed(address token);
+    error DSCEngine__TokenAddressesAndPriceFeedAddressesAmountsDontMatch();
+    error DSCEngine__FailedToDepositCollateral();
 
+    ///////////////////
+    //State Variable //
+    ///////////////////
+
+    DecentralizedStableCoin private immutable i_dsc;
+
+    mapping(address token => address priceFeed) private s_priceFeeds;
+    mapping(address user => mapping(address token => uint amount))
+        private s_collateralDeposited;
+
+    /////////////////
+    // Events///////
+    ////////////////
+    event CollateralDeposited(address user, address token, uint amount);
+
+    ///////////////////
+    // Modifiers///////
+    ///////////////////
+
+    modifier moreThanZero(uint256 amount) {
+        if (amount == 0) {
+            revert DSCEngine__NeedsMoreThanZero();
+        }
+        _;
+    }
+
+    modifier isAllowedToken(address token) {
+        if (s_priceFeeds[token] == address(0)) {
+            revert DSCEngine__TokenNotAllowed(token);
+        }
+        _;
+    }
+
+    constructor(
+        address[] memory tokenAddresses,
+        address[] memory priceFeedAddresses,
+        address dscAddress
+    ) {
+        if (tokenAddresses.length != priceFeedAddresses.length) {
+            revert DSCEngine__TokenAddressesAndPriceFeedAddressesAmountsDontMatch();
+        }
+        for (uint256 i = 0; i < tokenAddresses.length; i++) {
+            s_priceFeeds[tokenAddresses[i]] = priceFeedAddresses[i];
+        }
+        i_dsc = DecentralizedStableCoin(dscAddress);
+    }
+
+    /////////////////
+    // Functions/////
+    /////////////////
+
+    function depostCollateral(
+        address tokenCollateral,
+        uint256 amountCollateral
+    )
+        external
+        moreThanZero(amountCollateral)
+        isAllowedToken(tokenCollateral)
+        nonReentrant
+    {
+        s_collateralDeposited[msg.sender][tokenCollateral] += amountCollateral;
+        emit CollateralDeposited(msg.sender, tokenCollateral, amountCollateral);
+
+        bool success = IERC20(tokenCollateral).transferFrom(
+            msg.sender,
+            address(this),
+            amountCollateral
+        );
+        if (!success) {
+            revert DSCEngine__FailedToDepositCollateral();
+        }
+        // deposit collateral
+    }
 }
