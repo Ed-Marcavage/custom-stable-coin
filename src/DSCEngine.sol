@@ -27,6 +27,7 @@ pragma solidity 0.8.19;
 import {ReentrancyGuard} from "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {DecentralizedStableCoin} from "./DecentralizedStableCoin.sol";
+import {AggregatorV3Interface} from "@chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol";
 
 /*
  * @title DSCEngine
@@ -55,10 +56,16 @@ contract DSCEngine is ReentrancyGuard {
     error DSCEngine__TokenNotAllowed(address token);
     error DSCEngine__TokenAddressesAndPriceFeedAddressesAmountsDontMatch();
     error DSCEngine__FailedToDepositCollateral();
+    error DSCEngine__HealthFactorBelowMinimum(uint256 healthFactor);
 
     ///////////////////
     //State Variable //
     ///////////////////
+    uint256 private constant ADDITIONAL_FEED_PRECISION = 1e10;
+    uint256 private constant LIQUIDATION_PRECISION = 100;
+    uint256 private constant PRECISION = 1e18;
+    uint256 private constant LIQUIDATION_THRESHOLD = 50; // 200% overcollateralized
+    uint256 private constant MIN_HEALTH_FACTOR = 1e18;
 
     DecentralizedStableCoin private immutable i_dsc;
 
@@ -66,10 +73,13 @@ contract DSCEngine is ReentrancyGuard {
     mapping(address user => mapping(address token => uint amount))
         private s_collateralDeposited;
 
+    mapping(address user => uint amountDcsMinted) private s_DscMinted;
+
     /////////////////
     // Events///////
     ////////////////
     event CollateralDeposited(address user, address token, uint amount);
+    address[] private s_collateralTokes;
 
     ///////////////////
     // Modifiers///////
@@ -99,6 +109,7 @@ contract DSCEngine is ReentrancyGuard {
         }
         for (uint256 i = 0; i < tokenAddresses.length; i++) {
             s_priceFeeds[tokenAddresses[i]] = priceFeedAddresses[i];
+            s_collateralTokes.push(tokenAddresses[i]);
         }
         i_dsc = DecentralizedStableCoin(dscAddress);
     }
@@ -128,5 +139,75 @@ contract DSCEngine is ReentrancyGuard {
             revert DSCEngine__FailedToDepositCollateral();
         }
         // deposit collateral
+    }
+
+    function mintDsc(
+        uint256 amountDscToMint
+    ) external moreThanZero(amountDscToMint) nonReentrant {
+        s_DscMinted[msg.sender] += amountDscToMint;
+        _revertIfHealthFactorIsBroken(msg.sender);
+    }
+
+    ///Private Functions////
+    function _revertIfHealthFactorIsBroken(address user) internal view {
+        uint256 healthFactor = _healthFactor(user);
+        if (healthFactor < MIN_HEALTH_FACTOR) {
+            revert DSCEngine__HealthFactorBelowMinimum(healthFactor);
+        }
+    }
+
+    function _healthFactor(address user) private view returns (uint256) {
+        // get total dsc minted
+        // get total collateral value
+        (
+            uint256 totalDscMinted,
+            uint256 totalCollateralValue
+        ) = _getAccountInformation(user);
+        // video 8
+        uint256 collateralAdjustedForThreshold = (totalCollateralValue *
+            LIQUIDATION_THRESHOLD) / LIQUIDATION_PRECISION;
+
+        return (collateralAdjustedForThreshold * PRECISION) / totalDscMinted;
+    }
+
+    function _getAccountInformation(
+        address user
+    )
+        private
+        view
+        returns (uint256 totalDscMinted, uint256 totalCollateralValue)
+    {
+        totalCollateralValue = getAccountCollateralUSDValue(user);
+        totalDscMinted = s_DscMinted[user];
+    }
+
+    /// Public & External Functions ///
+    function getAccountCollateralUSDValue(
+        address user
+    ) public view returns (uint256 totalCollateralValue) {
+        for (uint256 i = 0; i < s_collateralTokes.length; i++) {
+            address token = s_collateralTokes[i];
+            uint256 amount = s_collateralDeposited[user][token];
+            uint256 price = getUsdValueOfCollateral(token, amount);
+            totalCollateralValue += amount * price;
+        }
+    }
+
+    function getUsdValueOfCollateral(
+        address token,
+        uint256 amount
+    ) public view returns (uint256) {
+        AggregatorV3Interface priceFeed = AggregatorV3Interface(
+            s_priceFeeds[token]
+        );
+        (, int256 price, , , ) = priceFeed.latestRoundData();
+        // 1. uint256(price) converts the price from int256 to uint256.
+        // 2. Multiply the price by ADDITIONAL_FEED_PRECISION to convert it to 18 decimal places for uniform calculation.
+        //    This multiplication adjusts the 8 decimal place price to match the standard 18 decimal precision used in most DeFi projects.
+        // 3. Multiply the adjusted price by the amount of the collateral to get the total value in 18 decimal places.
+        // 4. Finally, divide by PRECISION to correct the multiplication by ADDITIONAL_FEED_PRECISION, ensuring the result is normalized to 18 decimals.
+        uint256 priceUsd = (amount *
+            (uint256(price) * ADDITIONAL_FEED_PRECISION)) / PRECISION;
+        return priceUsd;
     }
 }
