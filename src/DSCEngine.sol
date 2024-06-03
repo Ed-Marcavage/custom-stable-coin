@@ -57,14 +57,20 @@ contract DSCEngine is ReentrancyGuard {
     error DSCEngine__TokenAddressesAndPriceFeedAddressesAmountsDontMatch();
     error DSCEngine__FailedToDepositCollateral();
     error DSCEngine__HealthFactorBelowMinimum(uint256 healthFactor);
+    error DSCEngine__FailedToMintDsc();
 
     ///////////////////
     //State Variable //
     ///////////////////
+    // 1. ADDITIONAL_FEED_PRECISION: This constant is used to adjust the price feed from 8 to 18 decimal places.
     uint256 private constant ADDITIONAL_FEED_PRECISION = 1e10;
+    // 2. LIQUIDATION_PRECISION: This constant is used to adjust the liquidation threshold from 50% to 200%.
     uint256 private constant LIQUIDATION_PRECISION = 100;
+    // 3. PRECISION: This constant is used to adjust the precision of the health factor to 18 decimal places.
     uint256 private constant PRECISION = 1e18;
+    // 4. LIQUIDATION_THRESHOLD: This constant is used to set the liquidation threshold at 200%.
     uint256 private constant LIQUIDATION_THRESHOLD = 50; // 200% overcollateralized
+    // 5. MIN_HEALTH_FACTOR: This constant is used to set the minimum health factor at 1.
     uint256 private constant MIN_HEALTH_FACTOR = 1e18;
 
     DecentralizedStableCoin private immutable i_dsc;
@@ -146,6 +152,11 @@ contract DSCEngine is ReentrancyGuard {
     ) external moreThanZero(amountDscToMint) nonReentrant {
         s_DscMinted[msg.sender] += amountDscToMint;
         _revertIfHealthFactorIsBroken(msg.sender);
+
+        bool minted = i_dsc.mint(msg.sender, amountDscToMint);
+        if (!minted) {
+            revert DSCEngine__FailedToMintDsc();
+        }
     }
 
     ///Private Functions////
