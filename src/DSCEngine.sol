@@ -28,6 +28,7 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/security/ReentrancyGuard.
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {DecentralizedStableCoin} from "./DecentralizedStableCoin.sol";
 import {AggregatorV3Interface} from "@chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol";
+import "forge-std/console.sol";
 
 /*
  * @title DSCEngine
@@ -124,11 +125,27 @@ contract DSCEngine is ReentrancyGuard {
     // Functions/////
     /////////////////
 
+    /*
+     * @param tokenCollateral: The address of the token to deposit as collateral
+     * @param amountCollateral: The amount of the token to deposit as collateral
+     * @param amountDscToMint: The amount of DSC to mint
+     * @notice This function allows a user to deposit collateral and mint DSC in one transaction
+     */
+
+    function depositCollateralAndMintDSC(
+        address tokenCollateral,
+        uint256 amountCollateral,
+        uint256 amountDscToMint
+    ) external {
+        depostCollateral(tokenCollateral, amountCollateral);
+        mintDsc(amountDscToMint);
+    }
+
     function depostCollateral(
         address tokenCollateral,
         uint256 amountCollateral
     )
-        external
+        public
         moreThanZero(amountCollateral)
         isAllowedToken(tokenCollateral)
         nonReentrant
@@ -149,7 +166,7 @@ contract DSCEngine is ReentrancyGuard {
 
     function mintDsc(
         uint256 amountDscToMint
-    ) external moreThanZero(amountDscToMint) nonReentrant {
+    ) public moreThanZero(amountDscToMint) nonReentrant {
         s_DscMinted[msg.sender] += amountDscToMint;
         _revertIfHealthFactorIsBroken(msg.sender);
 
@@ -162,7 +179,7 @@ contract DSCEngine is ReentrancyGuard {
     ///Private Functions////
     function _revertIfHealthFactorIsBroken(address user) internal view {
         uint256 healthFactor = _healthFactor(user);
-        if (healthFactor < MIN_HEALTH_FACTOR) {
+        if (healthFactor < MIN_HEALTH_FACTOR /**1e18 */) {
             revert DSCEngine__HealthFactorBelowMinimum(healthFactor);
         }
     }
@@ -177,6 +194,13 @@ contract DSCEngine is ReentrancyGuard {
         // video 8
         uint256 collateralAdjustedForThreshold = (totalCollateralValue *
             LIQUIDATION_THRESHOLD) / LIQUIDATION_PRECISION;
+
+        console.log("totalCollateralValue", totalCollateralValue);
+        console.log(
+            "/ LIQUIDATION_THRESHOLD",
+            totalCollateralValue * LIQUIDATION_THRESHOLD
+        );
+        console.log("/ LIQUIDATION_PRECISION", collateralAdjustedForThreshold);
 
         return (collateralAdjustedForThreshold * PRECISION) / totalDscMinted;
     }
@@ -212,13 +236,53 @@ contract DSCEngine is ReentrancyGuard {
             s_priceFeeds[token]
         );
         (, int256 price, , , ) = priceFeed.latestRoundData();
-        // 1. uint256(price) converts the price from int256 to uint256.
-        // 2. Multiply the price by ADDITIONAL_FEED_PRECISION to convert it to 18 decimal places for uniform calculation.
-        //    This multiplication adjusts the 8 decimal place price to match the standard 18 decimal precision used in most DeFi projects.
-        // 3. Multiply the adjusted price by the amount of the collateral to get the total value in 18 decimal places.
-        // 4. Finally, divide by PRECISION to correct the multiplication by ADDITIONAL_FEED_PRECISION, ensuring the result is normalized to 18 decimals.
-        uint256 priceUsd = (amount *
-            (uint256(price) * ADDITIONAL_FEED_PRECISION)) / PRECISION;
+
+        // * ADDITIONAL_FEED_PRECISION - adds 10 decimals to the price feed
+        // 200000000000 -> 2000000000000000000000
+
+        // / PRECISION - divides the price by 1e18
+        // 2000000000000000000000 -> 2000
+
+        // 2000_00000000_0000000000 = 2000_00000000 * 1e10
+        uint256 convertedPriceFeedPrice = uint256(price) *
+            ADDITIONAL_FEED_PRECISION;
+
+        console.log(
+            "Coverting %e to %e",
+            uint256(price),
+            convertedPriceFeedPrice
+        );
+
+        // 2000 = 2000_00000000_0000000000 / 1e18
+        uint256 convertedPriceFeedPriceToPrecision = convertedPriceFeedPrice /
+            PRECISION;
+
+        console.log(
+            "Coverting %s to %s",
+            convertedPriceFeedPrice,
+            convertedPriceFeedPriceToPrecision
+        );
+
+        uint256 priceUsd = amount * convertedPriceFeedPriceToPrecision;
+
+        console.log(
+            "Multiplying %s by %s to get price of %s",
+            amount,
+            convertedPriceFeedPriceToPrecision,
+            priceUsd
+        );
+
         return priceUsd;
+    }
+
+    function getAccountAmountCollateral(
+        address user,
+        address token
+    ) public view returns (uint totalCollateralAmount) {
+        totalCollateralAmount = s_collateralDeposited[user][token];
+    }
+
+    function getDSCMinted(address user) public view returns (uint) {
+        return s_DscMinted[user];
     }
 }
