@@ -20,14 +20,35 @@ contract DSCEngineTest is Test {
     DSCEngine dsce;
     HelperConfig config;
     address ethUsedPriceFeed;
+    address wbtcUsdPriceFeed;
     address weth;
 
     function setUp() external {
         deployDecentralizedStableCoin = new DeployDecentralizedStableCoin();
         (dsc, dsce, config) = deployDecentralizedStableCoin.run();
-        (ethUsedPriceFeed, , weth, , ) = config.activeNetworkConfig();
+        (ethUsedPriceFeed, wbtcUsdPriceFeed, weth, , ) = config
+            .activeNetworkConfig();
 
         ERC20Mock(weth).mint(USER, STARTING_ERC20_BALANCE);
+    }
+
+    ///////////////////
+    // constructor ////
+    ///////////////////
+    address[] public tokenAddresses;
+    address[] public priceFeedAddresses;
+
+    function testConstructorFailsMisMatchArraySize() public {
+        tokenAddresses.push(weth);
+        priceFeedAddresses.push(ethUsedPriceFeed);
+        priceFeedAddresses.push(wbtcUsdPriceFeed);
+
+        vm.expectRevert(
+            DSCEngine
+                .DSCEngine__TokenAddressesAndPriceFeedAddressesAmountsDontMatch
+                .selector
+        );
+        new DSCEngine(tokenAddresses, priceFeedAddresses, address(dsc));
     }
 
     function testGetUsdValue() public {
@@ -69,6 +90,32 @@ contract DSCEngineTest is Test {
         assertEq(1e18, actualCollateral);
 
         dsce.mintDsc(2000e18);
+        vm.stopPrank();
+    }
+
+    function testGetTokenAmountFromUsd() public {
+        uint256 usdAmount = 100 ether;
+        // 2,000$ per 1 eth, 0.05 eth per 100$
+        uint256 expectedWeth = 0.05 ether;
+        uint256 actualWeth = dsce.getTokenAmountFromUsd(weth, usdAmount);
+        assertEq(expectedWeth, actualWeth);
+    }
+
+    function testRevertIfUnapprovedToken() public {
+        ERC20Mock ranToken = new ERC20Mock(
+            "RAN",
+            "RAN",
+            USER,
+            AMOUNT_COLLATERAL
+        );
+        vm.startPrank(USER);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                DSCEngine.DSCEngine__TokenNotAllowed.selector,
+                address(ranToken)
+            )
+        );
+        dsce.depostCollateral(address(ranToken), AMOUNT_COLLATERAL);
         vm.stopPrank();
     }
 }
