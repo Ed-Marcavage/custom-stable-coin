@@ -12,7 +12,7 @@ import "forge-std/console.sol";
 
 contract DSCEngineTest is Test {
     address public USER = makeAddr("user");
-    uint256 public constant AMOUNT_COLLATERAL = 10 ether;
+    uint256 public constant AMOUNT_COLLATERAL = 1 ether;
     uint256 public constant STARTING_ERC20_BALANCE = 10 ether;
 
     DeployDecentralizedStableCoin deployDecentralizedStableCoin;
@@ -68,7 +68,7 @@ contract DSCEngineTest is Test {
         uint actualCollateral = dsce.getDSCMinted(USER);
         assertEq(1e18, actualCollateral);
 
-        dsce.mintDsc(1e18);
+        dsce.mintDsc(2000e18);
         vm.stopPrank();
     }
 }
