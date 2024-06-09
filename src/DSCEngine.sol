@@ -149,6 +149,7 @@ contract DSCEngine is ReentrancyGuard {
      * @notice This function allows a user to deposit collateral and mint DSC in one transaction
      */
 
+    // 3_000000000000000000
     function depositCollateralAndMintDSC(
         address tokenCollateral,
         uint256 amountCollateral,
@@ -264,42 +265,52 @@ contract DSCEngine is ReentrancyGuard {
     ///Private Functions////
     function _revertIfHealthFactorIsBroken(address user) internal view {
         uint256 healthFactor = _healthFactor(user);
-        //50000000000000000000000_00000000_0000000000
+        //.500000000000000000
         if (healthFactor < MIN_HEALTH_FACTOR /**1e18 */) {
             revert DSCEngine__HealthFactorBelowMinimum(healthFactor);
         }
     }
 
+    // @note - forcing 100% collateralization not 200%, i think
     function _healthFactor(address user) private view returns (uint256) {
-        // get total dsc minted
-        // get total collateral value
         (
             uint256 totalDscMinted,
             uint256 totalCollateralValue
         ) = _getAccountInformation(user);
-        // video 8
-        // time value by 50 then divide by 100
-        uint256 collateralAdjustedForThreshold = (totalCollateralValue *
+
+        // 1,000_000000000000000000 (1e21)
+        console.log("totalDscMinted", totalDscMinted);
+        // 2,000_000000000000000000 (2e21)
+        console.log("totalCollateralValue", totalCollateralValue);
+
+        // Effectively just halving the collateral value by dividing by 50 & multiplying by 100
+        // 1,000_000000000000000000 (2e21)
+        uint256 effectiveCollateralAtThreshold = (totalCollateralValue *
             LIQUIDATION_THRESHOLD) / LIQUIDATION_PRECISION;
+        console.log(
+            "effectiveCollateralAtThreshold",
+            effectiveCollateralAtThreshold
+        );
 
-        // //2000_00000000_0000000000
-        // // 2000_0000000000_00000000
-        // console.log("totalCollateralValue", totalCollateralValue);
-        // //2000_00000000_0000000000
-        // console.log(
-        //     "totalCollateralValue / PRECISION",
-        //     totalCollateralValue / PRECISION
-        // );
-        // // 1000000000000000000000_00000000_0000000000
-        // console.log("% LIQUIDATION_PRECISION", collateralAdjustedForThreshold);
-        // console.log("* PRECISION", collateralAdjustedForThreshold * PRECISION);
-        // // 10000000000000000000_0000000000_0000000000
-        // console.log(
-        //     "HF",
-        //     (collateralAdjustedForThreshold * PRECISION) / totalDscMinted
-        // );
+        // Adjust for precision to maintain ratio accuracy
+        //example
+        // 123456789111111111 * PRECISION =
+        // 123456789111111111_000000000000000000
+        // multiply by 1e18 effectivly shifts the decimal place 18 places to the right
+        // - or adds 18 zeros to the end of the number
+        // 1,000_000000000000000000_000000000000000000 (1e39)
+        uint256 collateralInTermsOfDsc = effectiveCollateralAtThreshold *
+            PRECISION;
 
-        return (collateralAdjustedForThreshold * PRECISION) / totalDscMinted;
+        console.log("collateralInTermsOfDsc", collateralInTermsOfDsc);
+
+        // Calculate the health factor
+        //1000000000000000000 (1e18) = (1e39) / 1e21
+        uint256 healthFactor = collateralInTermsOfDsc / totalDscMinted;
+
+        console.log("healthFactor", healthFactor);
+
+        return healthFactor;
     }
 
     function _getAccountInformation(
@@ -365,8 +376,7 @@ contract DSCEngine is ReentrancyGuard {
         for (uint256 i = 0; i < s_collateralTokes.length; i++) {
             address token = s_collateralTokes[i];
             uint256 amount = s_collateralDeposited[user][token];
-            uint256 price = getUsdValueOfCollateral(token, amount);
-            totalCollateralValue += amount * price;
+            totalCollateralValue += getUsdValueOfCollateral(token, amount);
         }
     }
 
@@ -406,6 +416,7 @@ contract DSCEngine is ReentrancyGuard {
             s_priceFeeds[token]
         );
         (, int256 price, , , ) = priceFeed.latestRoundData();
+
         return ((usdAmountInWei * PRECISION) /
             (uint256(price) * ADDITIONAL_FEED_PRECISION));
     }
@@ -419,5 +430,15 @@ contract DSCEngine is ReentrancyGuard {
 
     function getDSCMinted(address user) public view returns (uint) {
         return s_DscMinted[user];
+    }
+
+    function getAccountInformation(
+        address user
+    )
+        public
+        view
+        returns (uint256 totalDscMinted, uint256 totalCollateralValue)
+    {
+        (totalDscMinted, totalCollateralValue) = _getAccountInformation(user);
     }
 }
