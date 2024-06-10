@@ -100,6 +100,24 @@ contract DSCEngineTest is Test {
         vm.stopPrank();
     }
 
+    function testCanMintDSCRevertsHealthFactor() public depositedCollateral {
+        vm.startPrank(USER);
+
+        uint256 expectedHealthFactor = dsce.calculateHealthFactor(
+            1001e18,
+            dsce.getUsdValueOfCollateral(weth, AMOUNT_COLLATERAL)
+        );
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                DSCEngine.DSCEngine__HealthFactorBelowMinimum.selector,
+                uint256(expectedHealthFactor)
+            )
+        );
+        dsce.mintDsc(1001e18);
+        vm.stopPrank();
+    }
+
     function testGetTokenAmountFromUsd() public {
         uint256 usdAmount = 100 ether; //100 * 10^18
         // 2,000$ per 1 eth, 0.05 eth per 100$
