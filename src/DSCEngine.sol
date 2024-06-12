@@ -248,11 +248,16 @@ contract DSCEngine is ReentrancyGuard {
         uint256 totalCollateralToSeize = tokenAmountFromDebtCovered +
             bonusCollateral;
 
+        // sends collateral from undercollaterized user to msg.sender (liquidator)
+        // reduce s_collateralDeposited[from] for undercollaterized user
         _redeemCollateral(user, msg.sender, collateral, totalCollateralToSeize);
+        // send collateral from msg.sender to contract to burn DSC
         _burnDsc(debtToCover, user, msg.sender);
 
         uint256 endingHealthFactor = _healthFactor(user);
         if (endingHealthFactor <= staringHealthFactor) {
+            console.log("endingHealthFactor", endingHealthFactor);
+            console.log("staringHealthFactor", staringHealthFactor);
             revert DSCEngine__HealthFactorNotImproved();
         }
         _revertIfHealthFactorIsBroken(msg.sender);
@@ -307,6 +312,15 @@ contract DSCEngine is ReentrancyGuard {
         address tokenCollateralAddress,
         uint256 amountCollateral
     ) private {
+        console.log(
+            "s_collateralDeposited[from][tokenCollateralAddress]",
+            s_collateralDeposited[from][tokenCollateralAddress]
+        );
+        console.log("amountCollateral", amountCollateral);
+        // 10_000000000000000000
+        // 5_502751375687843921
+        // 7_333333333333333332
+        // _redeemCollateral(user, msg.sender, collateral, totalCollateralToSeize);
         s_collateralDeposited[from][tokenCollateralAddress] -= amountCollateral;
         emit CollateralRedeemed(
             from,
@@ -492,5 +506,9 @@ contract DSCEngine is ReentrancyGuard {
 
     function getDSCMinted(address user) public view returns (uint) {
         return s_DSCMinted[user];
+    }
+
+    function getHealthFactor(address user) public view returns (uint) {
+        return _healthFactor(user);
     }
 }

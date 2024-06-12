@@ -8,6 +8,7 @@ import {HelperConfig} from "../../script/HelperConfig.sol";
 import {DeployDecentralizedStableCoin} from "../../script/DeployDecentralizedStableCoin.s.sol";
 import {DSCEngine} from "../../src/DSCEngine.sol";
 import {ERC20Mock} from "@openzeppelin/contracts/mocks/ERC20Mock.sol";
+import {MockV3Aggregator} from "../mocks/MockV3Aggregator.sol";
 import "forge-std/console.sol";
 
 contract DSCEngineTest is Test {
@@ -24,10 +25,13 @@ contract DSCEngineTest is Test {
     DecentralizedStableCoin dsc;
     DSCEngine dsce;
     HelperConfig config;
-    address ethUsedPriceFeed;
+    address ethUsdPriceFeed;
     address wbtcUsdPriceFeed;
     address weth;
     address wbtc;
+
+    address public liquidator = makeAddr("liquidator");
+    uint256 public collateralToCover = 20 ether;
 
     ERC20Mock ranToken = new ERC20Mock("RAN", "RAN", USER, AMOUNT_COLLATERAL);
 
@@ -41,6 +45,7 @@ contract DSCEngineTest is Test {
 
     modifier depositedCollateralAndMintedDsc() {
         vm.startPrank(USER);
+        // approve dsce contract to use amountCollateral amount of weth
         ERC20Mock(weth).approve(address(dsce), amountCollateral);
         dsce.depositCollateralAndMintDSC(weth, amountCollateral, amountToMint);
         vm.stopPrank();
@@ -50,7 +55,7 @@ contract DSCEngineTest is Test {
     function setUp() external {
         deployDecentralizedStableCoin = new DeployDecentralizedStableCoin();
         (dsc, dsce, config) = deployDecentralizedStableCoin.run();
-        (ethUsedPriceFeed, wbtcUsdPriceFeed, weth, wbtc, ) = config
+        (ethUsdPriceFeed, wbtcUsdPriceFeed, weth, wbtc, ) = config
             .activeNetworkConfig();
 
         ERC20Mock(weth).mint(USER, STARTING_USER_BALANCE);
@@ -109,6 +114,18 @@ contract DSCEngineTest is Test {
         assertEq(expectedHealthFactor, actualHealthFactor);
     }
 
+    function testCalculateVariableHealthFactor() public {
+        uint256 startingAmountToMint = 10_000 ether;
+        uint256 startingCollateral = 20_000 ether;
+        uint256 expectedHealthFactor = 1e18;
+        uint256 actualHealthFactor = dsce.calculateHealthFactor(
+            startingAmountToMint,
+            startingCollateral
+        );
+        //1_000000000000000000
+        assertEq(expectedHealthFactor, actualHealthFactor);
+    }
+
     function testGetCollateralAccountAmountCollateral()
         public
         depositedCollateral
@@ -131,7 +148,7 @@ contract DSCEngineTest is Test {
 
     function testConstructorFailsMisMatchArraySize() public {
         tokenAddresses.push(weth);
-        priceFeedAddresses.push(ethUsedPriceFeed);
+        priceFeedAddresses.push(ethUsdPriceFeed);
         priceFeedAddresses.push(wbtcUsdPriceFeed);
 
         vm.expectRevert(
@@ -297,12 +314,57 @@ contract DSCEngineTest is Test {
     // liquidate ///////////
     ////////////////////////
 
-    function testLiquidate() public depositedCollateralAndMintedDsc {
-        int256 ethUsdUpdatedPrice = 18e8; // 1 ETH = $18
+    function testLiquidate() public {
+        // 10 ETH -> 20,000 USD
+        uint256 startingCollateral = 10 ether;
+        uint256 startingAmountToMint = 10_000 ether;
+        uint256 liquidatorCollateral = 20 ether;
+        uint256 liquidatorAmountToMint = 10_000 ether;
 
-        // MockV3Aggregator(ethUsdPriceFeed).updateAnswer(ethUsdUpdatedPrice);
-        // uint256 userHealthFactor = dsce.getHealthFactor(user);
+        vm.startPrank(USER);
+        ERC20Mock(weth).approve(address(dsce), startingCollateral);
+        // HF - 1_000000000000000000 (20k/10k - 10 ETH @ 2,000 USD; 10,000 DSC minted)
+        dsce.depositCollateralAndMintDSC(
+            weth,
+            startingCollateral,
+            startingAmountToMint
+        );
+        console.log("1 - health factor", dsce.getHealthFactor(USER));
+        vm.stopPrank();
 
-        // ERC20Mock(weth).mint(liquidator, collateralToCover);
+        int256 ethUsdUpdatedPrice = 1099e8; // 1 ETH = $1,000
+        console.log("ethUsdPriceFeed", uint256(ethUsdUpdatedPrice));
+        //1000_00000000
+
+        MockV3Aggregator(ethUsdPriceFeed).updateAnswer(ethUsdUpdatedPrice);
+        // HF - .500000000000000000 (10k/10k - 10 ETH @ 1,000 USD; 10,000 DSC minted)
+        console.log("2 - health factor", dsce.getHealthFactor(USER));
+
+        ERC20Mock(weth).mint(liquidator, liquidatorCollateral);
+
+        vm.startPrank(liquidator);
+        ERC20Mock(weth).approve(address(dsce), liquidatorCollateral);
+        dsce.depositCollateralAndMintDSC(
+            weth,
+            liquidatorCollateral,
+            liquidatorAmountToMint
+        );
+        // HF - 1_000000000000000000 (20k/10k - 20 ETH @ 1,000 USD; 10,000 DSC minted)
+        console.log("3 - health factor", dsce.getHealthFactor(liquidator));
+        dsc.approve(address(dsce), liquidatorAmountToMint);
+        dsce.liquidate(weth, USER, liquidatorAmountToMint);
+        vm.stopPrank();
+
+        // uint256 tokenAmountFromDebtCovered = dsce.getTokenAmountFromUsd(
+        //     weth,
+        //     liquidatorCollateral
+        // );
+        // //9989_000000000000000000
+        // //11_000000000000000000
+        // //10000_000000000000000000
+
+        //weth 500000000000000000
+        console.log("weth balance", ERC20Mock(weth).balanceOf(liquidator));
+        assertEq(dsc.balanceOf(liquidator), startingAmountToMint);
     }
 }
