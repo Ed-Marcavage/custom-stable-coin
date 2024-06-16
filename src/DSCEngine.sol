@@ -98,7 +98,7 @@ contract DSCEngine is ReentrancyGuard {
         address indexed token,
         uint indexed amount
     );
-    address[] private s_collateralTokes;
+    address[] private s_collateralTokens;
 
     event CollateralRedeemed(
         address indexed redeemedFrom,
@@ -139,7 +139,7 @@ contract DSCEngine is ReentrancyGuard {
         }
         for (uint256 i = 0; i < tokenAddresses.length; i++) {
             s_priceFeeds[tokenAddresses[i]] = priceFeedAddresses[i];
-            s_collateralTokes.push(tokenAddresses[i]);
+            s_collateralTokens.push(tokenAddresses[i]);
         }
         i_dsc = DecentralizedStableCoin(dscAddress);
     }
@@ -159,7 +159,7 @@ contract DSCEngine is ReentrancyGuard {
         uint256 amountCollateral,
         uint256 amountDscToMint
     ) external {
-        depostCollateral(tokenCollateral, amountCollateral);
+        depositCollateral(tokenCollateral, amountCollateral);
         mintDsc(amountDscToMint);
     }
 
@@ -225,6 +225,10 @@ contract DSCEngine is ReentrancyGuard {
     * @notice: A known bug would be if the protocol was only 100% collateralized, we wouldn't be able to liquidate
     anyone.
      * For example, if the price of the collateral plummeted before anyone could be liquidated.
+     * Eds note:
+     * totalCollateralToSeize - should always be 110% of debtToCover
+     * _burnDsc is why the liqudator needs DSC
+     *      - We need cover/remove the debt of the insolvent user until they are no longer insolvent
      */
     function liquidate(
         address collateral,
@@ -236,28 +240,40 @@ contract DSCEngine is ReentrancyGuard {
             revert DSCEngine_HealthFactorOk();
         }
 
-        // How much Token do we need to cover the debt
+        // Convert DSC amount to collateral (ETH/BTC) amount
+        // @18$ per ETH
+        //tokenAmountFromDebtCovered = 5.5 ETH * 18$ = 99$
+        //bonusCollateral = 0.5 ETH * 18$ = 9$
+        // totalCollateralToSeize = 5.5 ETH + 0.5 ETH = 6.1 ETH
+        // totalCollateralToSeize - should always be 110% of debtToCover
         uint256 tokenAmountFromDebtCovered = getTokenAmountFromUsd(
             collateral,
-            debtToCover
+            debtToCover // 100 DSC
         );
 
+        // Calculate 10% bonus for liquidator - in collateral (ETH/BTC)
         uint256 bonusCollateral = (tokenAmountFromDebtCovered *
             LIQUIDATION_BONUS) / LIQUIDATION_PRECISION;
 
         uint256 totalCollateralToSeize = tokenAmountFromDebtCovered +
             bonusCollateral;
 
-        // sends collateral from undercollaterized user to msg.sender (liquidator)
+        console.log(
+            "Liquidator get %s base + %s bonus collateral totaling %s (Should always be 110% of debtToCover)",
+            tokenAmountFromDebtCovered,
+            bonusCollateral,
+            totalCollateralToSeize
+        ); //_555555555555555555
+        // sends 110% collateral from undercollaterized user to msg.sender (liquidator)
         // reduce s_collateralDeposited[from] for undercollaterized user
         _redeemCollateral(user, msg.sender, collateral, totalCollateralToSeize);
-        // send collateral from msg.sender to contract to burn DSC
+        // Liquidator receives 110% collateral from undercollaterized user
+        // but pays 100% of debt to protocol
+        // profit = 10% of debt
         _burnDsc(debtToCover, user, msg.sender);
 
         uint256 endingHealthFactor = _healthFactor(user);
         if (endingHealthFactor <= staringHealthFactor) {
-            console.log("endingHealthFactor", endingHealthFactor);
-            console.log("staringHealthFactor", staringHealthFactor);
             revert DSCEngine__HealthFactorNotImproved();
         }
         _revertIfHealthFactorIsBroken(msg.sender);
@@ -279,7 +295,7 @@ contract DSCEngine is ReentrancyGuard {
         }
     }
 
-    function depostCollateral(
+    function depositCollateral(
         address tokenCollateral,
         uint256 amountCollateral
     )
@@ -312,15 +328,6 @@ contract DSCEngine is ReentrancyGuard {
         address tokenCollateralAddress,
         uint256 amountCollateral
     ) private {
-        console.log(
-            "s_collateralDeposited[from][tokenCollateralAddress]",
-            s_collateralDeposited[from][tokenCollateralAddress]
-        );
-        console.log("amountCollateral", amountCollateral);
-        // 10_000000000000000000
-        // 5_502751375687843921
-        // 7_333333333333333332
-        // _redeemCollateral(user, msg.sender, collateral, totalCollateralToSeize);
         s_collateralDeposited[from][tokenCollateralAddress] -= amountCollateral;
         emit CollateralRedeemed(
             from,
@@ -329,6 +336,7 @@ contract DSCEngine is ReentrancyGuard {
             amountCollateral
         );
 
+        // transfer collateral to liquidator, from this contracts balance
         bool success = IERC20(tokenCollateralAddress).transfer(
             to,
             amountCollateral
@@ -347,11 +355,20 @@ contract DSCEngine is ReentrancyGuard {
         address dscFrom
     ) private {
         s_DSCMinted[onBehalfOf] -= amountDscToBurn;
-
+        // console log dsc balance contract has
+        console.log(
+            "DSC balance of contract: %s",
+            i_dsc.balanceOf(address(this))
+        );
         bool success = i_dsc.transferFrom(
             dscFrom,
             address(this),
             amountDscToBurn
+        );
+        //after transfer
+        console.log(
+            "DSC balance of contract: %s",
+            i_dsc.balanceOf(address(this))
         );
 
         if (!success) {
@@ -404,6 +421,8 @@ contract DSCEngine is ReentrancyGuard {
         return priceUsd;
     }
 
+    // HF = (Collateral x 0.5) / DSC
+    // OR Collateral / (DSC x 2)
     function _calculateHealthFactor(
         uint256 totalDscMinted,
         uint256 totalCollateralValue
@@ -466,8 +485,8 @@ contract DSCEngine is ReentrancyGuard {
     function getAccountCollateralValue(
         address user
     ) public view returns (uint256 totalCollateralValue) {
-        for (uint256 i = 0; i < s_collateralTokes.length; i++) {
-            address token = s_collateralTokes[i];
+        for (uint256 i = 0; i < s_collateralTokens.length; i++) {
+            address token = s_collateralTokens[i];
             uint256 amount = s_collateralDeposited[user][token];
             totalCollateralValue += _getUsdValue(token, amount);
         }
@@ -510,5 +529,13 @@ contract DSCEngine is ReentrancyGuard {
 
     function getHealthFactor(address user) public view returns (uint) {
         return _healthFactor(user);
+    }
+
+    function getLiquidationBonus() public pure returns (uint) {
+        return LIQUIDATION_BONUS;
+    }
+
+    function getCollateralTokens() external view returns (address[] memory) {
+        return s_collateralTokens;
     }
 }

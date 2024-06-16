@@ -18,8 +18,10 @@ contract DSCEngineTest is Test {
     uint256 public constant STARTING_USER_BALANCE = 10 ether;
 
     address public user = address(1);
+
     uint256 amountCollateral = 10 ether;
     uint256 amountToMint = 100 ether;
+    uint256 public collateralToCover = 20 ether;
 
     DeployDecentralizedStableCoin deployDecentralizedStableCoin;
     DecentralizedStableCoin dsc;
@@ -31,14 +33,13 @@ contract DSCEngineTest is Test {
     address wbtc;
 
     address public liquidator = makeAddr("liquidator");
-    uint256 public collateralToCover = 20 ether;
 
     ERC20Mock ranToken = new ERC20Mock("RAN", "RAN", USER, AMOUNT_COLLATERAL);
 
     modifier depositedCollateral() {
         vm.startPrank(USER);
         ERC20Mock(weth).approve(address(dsce), AMOUNT_COLLATERAL);
-        dsce.depostCollateral(weth, AMOUNT_COLLATERAL);
+        dsce.depositCollateral(weth, AMOUNT_COLLATERAL);
         vm.stopPrank();
         _;
     }
@@ -73,12 +74,48 @@ contract DSCEngineTest is Test {
         assertEq(expectedUsd, actualUsd);
     }
 
+    function testGetUsdValuePriceChange() public {
+        uint256 ethAmount = 15e18;
+        uint256 expectedUsd = 30_000e18;
+        uint256 actualUsd = dsce.getUsdValue(weth, ethAmount);
+        assertEq(expectedUsd, actualUsd);
+
+        int256 ethUsdUpdatedPrice = 100e8;
+        MockV3Aggregator(ethUsdPriceFeed).updateAnswer(ethUsdUpdatedPrice);
+
+        uint256 ethAmountChanged = 15e18;
+        uint256 expectedUsdChanged = 1_500e18;
+        uint256 actualUsdChanged = dsce.getUsdValue(weth, ethAmountChanged);
+
+        assertEq(expectedUsdChanged, actualUsdChanged);
+    }
+
     function testGetTokenAmountFromUsd() public {
+        uint256 usdAmount = 1000 ether; //1000 * 1e18
+        // 2,000$ per 1 eth in mock
+        uint256 expectedWeth = 0.5 ether;
+        uint256 actualWeth = dsce.getTokenAmountFromUsd(weth, usdAmount);
+        assertEq(expectedWeth, actualWeth);
+    }
+
+    function testGetTokenAmountFromUsdPriceChanged() public {
         uint256 usdAmount = 1000 * 1e18; //1000 ether;
         // 2,000$ per 1 eth in mock
         uint256 expectedWeth = 0.5 ether;
         uint256 actualWeth = dsce.getTokenAmountFromUsd(weth, usdAmount);
         assertEq(expectedWeth, actualWeth);
+
+        int256 ethUsdUpdatedPrice = 15e8;
+        MockV3Aggregator(ethUsdPriceFeed).updateAnswer(ethUsdUpdatedPrice);
+
+        uint256 usdAmountChanged = 5 * 1e18; //10 ether;
+        // 2,000$ per 1 eth in mock
+        uint256 expectedWethChanged = 333333333333333333;
+        uint256 actualWethChanged = dsce.getTokenAmountFromUsd(
+            weth,
+            usdAmountChanged
+        );
+        assertEq(expectedWethChanged, actualWethChanged);
     }
 
     function testGetAccountAmountCollateral() public depositedCollateral {
@@ -112,6 +149,78 @@ contract DSCEngineTest is Test {
             collateralValue
         );
         assertEq(expectedHealthFactor, actualHealthFactor);
+    }
+
+    // Collateral Needed = Health Factor × Amount Borrowed × 2
+    function testCalculateHealthFactorVariable() public {
+        // HF 1
+        uint256 dscMinted = 1000e18;
+        uint256 collateralValue = 2000e18;
+        uint256 expectedHealthFactor = 1e18;
+        uint256 actualHealthFactor = dsce.calculateHealthFactor(
+            dscMinted,
+            collateralValue
+        );
+        assertEq(expectedHealthFactor, actualHealthFactor);
+
+        // HF 2
+        dscMinted = 1000e18;
+        collateralValue = 4000e18;
+        expectedHealthFactor = 2e18;
+        actualHealthFactor = dsce.calculateHealthFactor(
+            dscMinted,
+            collateralValue
+        );
+        assertEq(expectedHealthFactor, actualHealthFactor);
+        //6000_000000000000000000 @ 1000e18
+        //12.000_000000000000000000
+        //8000_000000000000000000
+        console.log("requiredCollateral", requiredCollateral(2, 1500e18));
+
+        // HF 2
+        dscMinted = 1500e18;
+        collateralValue = 6000e18;
+        expectedHealthFactor = 2e18;
+        actualHealthFactor = dsce.calculateHealthFactor(
+            dscMinted,
+            collateralValue
+        );
+        assertEq(expectedHealthFactor, actualHealthFactor);
+
+        // HF 3
+        dscMinted = 100e18;
+        collateralValue = 600e18;
+        expectedHealthFactor = 3e18;
+        actualHealthFactor = dsce.calculateHealthFactor(
+            dscMinted,
+            collateralValue
+        );
+        assertEq(expectedHealthFactor, actualHealthFactor);
+
+        dscMinted = 10e18;
+        collateralValue = 100e18;
+        expectedHealthFactor = 5e18;
+        actualHealthFactor = dsce.calculateHealthFactor(
+            dscMinted,
+            collateralValue
+        );
+        assertEq(expectedHealthFactor, actualHealthFactor);
+
+        dscMinted = 10e18;
+        collateralValue = 20e18;
+        expectedHealthFactor = 1e18;
+        actualHealthFactor = dsce.calculateHealthFactor(
+            dscMinted,
+            collateralValue
+        );
+        assertEq(expectedHealthFactor, actualHealthFactor);
+    }
+
+    function requiredCollateral(
+        uint256 healthFactor,
+        uint256 borrowedAmount
+    ) public pure returns (uint256) {
+        return healthFactor * borrowedAmount * 2;
     }
 
     function testCalculateVariableHealthFactor() public {
@@ -166,7 +275,7 @@ contract DSCEngineTest is Test {
     function testRevertsIfCollateralZero() public {
         vm.startPrank(USER);
         vm.expectRevert(DSCEngine.DSCEngine__NeedsMoreThanZero.selector);
-        dsce.depostCollateral(weth, 0);
+        dsce.depositCollateral(weth, 0);
         vm.stopPrank();
     }
 
@@ -183,7 +292,7 @@ contract DSCEngineTest is Test {
                 address(ranToken)
             )
         );
-        dsce.depostCollateral(address(ranToken), AMOUNT_COLLATERAL);
+        dsce.depositCollateral(address(ranToken), AMOUNT_COLLATERAL);
         vm.stopPrank();
     }
 
@@ -314,57 +423,150 @@ contract DSCEngineTest is Test {
     // liquidate ///////////
     ////////////////////////
 
-    function testLiquidate() public {
-        // 10 ETH -> 20,000 USD
-        uint256 startingCollateral = 10 ether;
-        uint256 startingAmountToMint = 10_000 ether;
-        uint256 liquidatorCollateral = 20 ether;
-        uint256 liquidatorAmountToMint = 10_000 ether;
+    // @todo
+    // - drop price to 15, test getUsdValue
+    // play around with liquidate function
+    // fully understand HF calculation
+    function weiToEther(
+        uint256 weiAmount,
+        uint256 preciscion
+    ) public pure returns (uint256) {
+        return weiAmount / preciscion;
+    }
 
+    modifier liquidated() {
         vm.startPrank(USER);
-        ERC20Mock(weth).approve(address(dsce), startingCollateral);
-        // HF - 1_000000000000000000 (20k/10k - 10 ETH @ 2,000 USD; 10,000 DSC minted)
-        dsce.depositCollateralAndMintDSC(
-            weth,
-            startingCollateral,
-            startingAmountToMint
+        ERC20Mock(weth).approve(address(dsce), amountCollateral);
+        //MockV3Aggregator(ethUsdPriceFeed).updateAnswer(20e8);
+        console.log(
+            "User depositing $%s (%s ETH) For %s DSC",
+            weiToEther(dsce.getUsdValue(weth, amountCollateral), 1e18),
+            weiToEther(amountCollateral, 1e18),
+            weiToEther(amountToMint, 1e18)
         );
-        console.log("1 - health factor", dsce.getHealthFactor(USER));
+        dsce.depositCollateralAndMintDSC(weth, amountCollateral, amountToMint);
+        //100_000000000000000000
+        console.log(
+            "... and has a current HF of: %s = %s / %s * 2",
+            weiToEther(dsce.getHealthFactor(USER), 1e18),
+            weiToEther(dsce.getUsdValue(weth, amountCollateral), 1e18),
+            weiToEther(amountToMint, 1e18)
+        );
         vm.stopPrank();
-
-        int256 ethUsdUpdatedPrice = 1099e8; // 1 ETH = $1,000
-        console.log("ethUsdPriceFeed", uint256(ethUsdUpdatedPrice));
-        //1000_00000000
+        int256 ethUsdUpdatedPrice = 18e8; // 1 ETH = $18
 
         MockV3Aggregator(ethUsdPriceFeed).updateAnswer(ethUsdUpdatedPrice);
-        // HF - .500000000000000000 (10k/10k - 10 ETH @ 1,000 USD; 10,000 DSC minted)
-        console.log("2 - health factor", dsce.getHealthFactor(USER));
-
-        ERC20Mock(weth).mint(liquidator, liquidatorCollateral);
-
-        vm.startPrank(liquidator);
-        ERC20Mock(weth).approve(address(dsce), liquidatorCollateral);
-        dsce.depositCollateralAndMintDSC(
-            weth,
-            liquidatorCollateral,
-            liquidatorAmountToMint
+        uint256 userHealthFactor = dsce.getHealthFactor(USER);
+        //.900000000000000000
+        console.log(
+            "Price of ETH droped to $%s! User now has deposited $%s For %s DSC",
+            weiToEther(uint256(ethUsdUpdatedPrice), 1e8),
+            weiToEther(dsce.getUsdValue(weth, amountCollateral), 1e18),
+            weiToEther(amountToMint, 1e18)
         );
-        // HF - 1_000000000000000000 (20k/10k - 20 ETH @ 1,000 USD; 10,000 DSC minted)
-        console.log("3 - health factor", dsce.getHealthFactor(liquidator));
-        dsc.approve(address(dsce), liquidatorAmountToMint);
-        dsce.liquidate(weth, USER, liquidatorAmountToMint);
+        console.log(
+            "... and has a current HF of: .%s = %s / %s * 2",
+            weiToEther(dsce.getHealthFactor(USER), 1e16),
+            weiToEther(dsce.getUsdValue(weth, amountCollateral), 1e18),
+            weiToEther(amountToMint, 1e18)
+        );
+        vm.startPrank(liquidator);
+        ERC20Mock(weth).mint(liquidator, collateralToCover);
+        ERC20Mock(weth).approve(address(dsce), collateralToCover);
+        dsce.depositCollateralAndMintDSC(weth, collateralToCover, amountToMint);
+        console.log(
+            "Liquidator depositing $%s (%s ETH) For %s DSC",
+            weiToEther(dsce.getUsdValue(weth, collateralToCover), 1e18),
+            weiToEther(collateralToCover, 1e18),
+            weiToEther(amountToMint, 1e18)
+        );
+        console.log(
+            "... and has a current HF of: %se17 = %s / %s * 2",
+            weiToEther(dsce.getHealthFactor(liquidator), 1e17),
+            weiToEther(dsce.getUsdValue(weth, collateralToCover), 1e18),
+            weiToEther(amountToMint, 1e18)
+        );
+        dsc.approve(address(dsce), amountToMint);
+        //console log USER balance of DSC
+        console.log("Before User has %s DSC", dsc.balanceOf(USER));
+        //100000000000000000000
+        //100000000000000000000
+        dsce.liquidate(weth, USER, amountToMint); // We are covering their whole debt
+        console.log("After User has %s DSC", dsc.balanceOf(USER));
+        // bonus collateral - .555555555555555555
+        // =
+        console.log(
+            "User has been liquidated! Their current HF is: %s = %s / %s * 2",
+            weiToEther(dsce.getHealthFactor(USER), 1e18),
+            weiToEther(
+                dsce.getUsdValue(
+                    weth,
+                    dsce.getAccountAmountCollateral(USER, weth)
+                ),
+                1e18
+            ),
+            weiToEther(dsce.getDSCMinted(USER), 1e18)
+        );
+        console.log(
+            "User Currently has $%s (%se17 ETH)",
+            weiToEther(
+                dsce.getUsdValue(
+                    weth,
+                    dsce.getAccountAmountCollateral(USER, weth)
+                ),
+                1e18
+            ),
+            //3_888888888888888890
+            weiToEther(dsce.getAccountAmountCollateral(USER, weth), 1e17)
+        );
         vm.stopPrank();
+        _;
+    }
 
-        // uint256 tokenAmountFromDebtCovered = dsce.getTokenAmountFromUsd(
-        //     weth,
-        //     liquidatorCollateral
-        // );
-        // //9989_000000000000000000
-        // //11_000000000000000000
-        // //10000_000000000000000000
+    function testLiquidationPayoutIsCorrect() public liquidated {
+        uint256 liquidatorWethBalance = ERC20Mock(weth).balanceOf(liquidator);
 
-        //weth 500000000000000000
-        console.log("weth balance", ERC20Mock(weth).balanceOf(liquidator));
-        assertEq(dsc.balanceOf(liquidator), startingAmountToMint);
+        // 5$ in ETH / 15$ per ETH = 0.333 ETH
+        //5555555555555555555
+        console.log(
+            "getTokenAmountFromUsd",
+            dsce.getTokenAmountFromUsd(weth, amountToMint)
+        );
+        console.log(
+            "getLiquidationBonus",
+            dsce.getTokenAmountFromUsd(weth, amountToMint) /
+                dsce.getLiquidationBonus()
+        );
+        uint256 expectedWeth = dsce.getTokenAmountFromUsd(weth, amountToMint) +
+            (dsce.getTokenAmountFromUsd(weth, amountToMint) /
+                dsce.getLiquidationBonus());
+
+        uint256 hardCodedExpected = 6_111_111_111_111_111_110;
+
+        assertEq(liquidatorWethBalance, hardCodedExpected);
+        assertEq(liquidatorWethBalance, expectedWeth);
+    }
+
+    function testUserStillHasSomeEthAfterLiquidation() public liquidated {
+        // Get how much WETH the user lost - 110% of the amount minted
+        uint256 amountLiquidated = dsce.getTokenAmountFromUsd(
+            weth,
+            amountToMint
+        ) +
+            (dsce.getTokenAmountFromUsd(weth, amountToMint) /
+                dsce.getLiquidationBonus());
+
+        uint256 usdAmountLiquidated = dsce.getUsdValue(weth, amountLiquidated);
+        uint256 expectedUserCollateralValueInUsd = dsce.getUsdValue(
+            weth,
+            amountCollateral
+        ) - (usdAmountLiquidated);
+
+        (, uint256 userCollateralValueInUsd) = dsce.getAccountInformation(USER);
+        console.log("userCollateralValueInUsd", userCollateralValueInUsd);
+        //70_000000000000000020
+        uint256 hardCodedExpectedValue = 70_000_000_000_000_000_020;
+        assertEq(userCollateralValueInUsd, expectedUserCollateralValueInUsd);
+        assertEq(userCollateralValueInUsd, hardCodedExpectedValue);
     }
 }
