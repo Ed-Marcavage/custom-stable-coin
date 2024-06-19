@@ -391,6 +391,17 @@ contract DSCEngine is ReentrancyGuard {
         return _calculateHealthFactor(totalDscMinted, totalCollateralValue);
     }
 
+    //The return value always has the same number of decimals as the token itself, whereas it is supposed to be an 18-decimal USD amount.
+    // note crux of the issue
+    // - amount is assumed to always be 1e18
+    // - so if convertedPriceFeedPriceToPrecision is multiplied by 1e8 for example, the result will be off by 1e10 decimals bc convertedPriceFeedPriceToPrecision is actual price in USD (2000)
+    // of by delta of token decimals & 18
+    //      Left:  3000000000000
+    //      Right: 30000000000000000000000
+
+    // note - imact, internal acounting off causing HF to think value of
+    // -- BTC is $0.000003 instead of $30,000
+    // thus depositing 1 BTC basiclly doesnt impact HF
     function _getUsdValue(
         address token,
         uint256 amount
@@ -398,21 +409,27 @@ contract DSCEngine is ReentrancyGuard {
         AggregatorV3Interface priceFeed = AggregatorV3Interface(
             s_priceFeeds[token]
         );
+
+        //30000.00000000
         (, int256 price, , , ) = priceFeed.staleCheckLatestRoundData();
 
-        uint256 tokenDecimals = IERC20Metadata(token).decimals(); // Ensure the token supports IERC20Metadata
-        console.log("tokenDecimals: ", tokenDecimals);
-
-        // Adjust the token amount to 18 decimals
+        uint256 tokenDecimals = IERC20Metadata(token).decimals();
         uint256 amountAdjusted = amount * 10 ** (18 - tokenDecimals);
 
-        // Calculate the price in USD with precision
-        uint256 convertedPriceFeedPrice = (uint256(price) *
-            ADDITIONAL_FEED_PRECISION) / PRECISION;
+        uint256 convertedPriceFeedPrice = uint256(price) *
+            ADDITIONAL_FEED_PRECISION;
 
-        // Calculate the USD value in 18 decimals
-        uint256 priceUsd = amountAdjusted * convertedPriceFeedPrice;
-
+        uint256 convertedPriceFeedPriceToPrecision = convertedPriceFeedPrice /
+            PRECISION;
+        // console.log("price", uint256(price));
+        // console.log("convertedPriceFeedPrice", convertedPriceFeedPrice);
+        // console.log(
+        //     "convertedPriceFeedPriceToPrecision",
+        //     convertedPriceFeedPriceToPrecision
+        // );
+        uint256 priceUsd = amount * convertedPriceFeedPriceToPrecision;
+        //uint256 priceUsd = amountAdjusted * convertedPriceFeedPriceToPrecision;
+        // console.log("priceUsd", priceUsd);
         return priceUsd;
     }
 
@@ -494,21 +511,37 @@ contract DSCEngine is ReentrancyGuard {
         return _getUsdValue(token, amount);
     }
 
+    //The return value always has 18 decimals, but it should instead match the token's decimals since it returns a token amount.
     function getTokenAmountFromUsd(
         address token,
         uint256 usdAmountInWei
     ) public view returns (uint256) {
+        uint256 tokenDecimals = IERC20Metadata(token).decimals();
+
         AggregatorV3Interface priceFeed = AggregatorV3Interface(
             s_priceFeeds[token]
         );
         (, int256 price, , , ) = priceFeed.staleCheckLatestRoundData();
 
-        //1000_000000000000000000 * 1e18
         uint256 adjustedUSD = usdAmountInWei * PRECISION;
-        //2000_000000000000000000
         uint256 adjustedPrice = uint256(price) * ADDITIONAL_FEED_PRECISION;
+        uint256 rawTokenAmount = adjustedUSD / adjustedPrice;
+        uint256 tokenAmount = rawTokenAmount / (10 ** (18 - tokenDecimals));
 
-        return (adjustedUSD / adjustedPrice); //.500000000000000000
+        console.log("price", uint256(price));
+        console.log("adjustedUSD", adjustedUSD);
+        console.log("adjustedPrice", adjustedPrice);
+        console.log("rawTokenAmount", rawTokenAmount);
+        console.log("tokenAmount", tokenAmount);
+
+        // note fixed broken
+        //   price 29999.00000000
+        //   adjustedUSD 2727181818181000000000000000000
+        //   adjustedPrice 29999.000000000000000000
+        //   rawTokenAmount .90909090 - note return this if broke
+        //   tokenAmount 0 - return this when fixed
+
+        return rawTokenAmount;
     }
 
     function getAccountAmountCollateral(
