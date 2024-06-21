@@ -410,14 +410,16 @@ contract DSCEngine is ReentrancyGuard {
             s_priceFeeds[token]
         );
 
+        uint8 decimals = priceFeed.decimals();
+
         //30000.00000000
         (, int256 price, , , ) = priceFeed.staleCheckLatestRoundData();
 
         uint256 tokenDecimals = IERC20Metadata(token).decimals();
         uint256 amountAdjusted = amount * 10 ** (18 - tokenDecimals);
 
-        uint256 convertedPriceFeedPrice = uint256(price) *
-            ADDITIONAL_FEED_PRECISION;
+        uint256 convertedPriceFeedPrice = (uint256(price) * 1e18) /
+            (10 ** decimals);
 
         uint256 convertedPriceFeedPriceToPrecision = convertedPriceFeedPrice /
             PRECISION;
@@ -427,8 +429,8 @@ contract DSCEngine is ReentrancyGuard {
         //     "convertedPriceFeedPriceToPrecision",
         //     convertedPriceFeedPriceToPrecision
         // );
-        uint256 priceUsd = amount * convertedPriceFeedPriceToPrecision;
-        //uint256 priceUsd = amountAdjusted * convertedPriceFeedPriceToPrecision;
+        //uint256 priceUsd = amount * convertedPriceFeedPriceToPrecision;
+        uint256 priceUsd = amountAdjusted * convertedPriceFeedPriceToPrecision;
         // console.log("priceUsd", priceUsd);
         return priceUsd;
     }
@@ -511,7 +513,6 @@ contract DSCEngine is ReentrancyGuard {
         return _getUsdValue(token, amount);
     }
 
-    //The return value always has 18 decimals, but it should instead match the token's decimals since it returns a token amount.
     function getTokenAmountFromUsd(
         address token,
         uint256 usdAmountInWei
@@ -522,17 +523,12 @@ contract DSCEngine is ReentrancyGuard {
             s_priceFeeds[token]
         );
         (, int256 price, , , ) = priceFeed.staleCheckLatestRoundData();
-
-        uint256 adjustedUSD = usdAmountInWei * PRECISION;
-        uint256 adjustedPrice = uint256(price) * ADDITIONAL_FEED_PRECISION;
+        uint8 decimals = priceFeed.decimals();
+        // @todo - understand this better
+        uint256 adjustedUSD = usdAmountInWei * PRECISION; // 2e21 * 1e18 = 2e39
+        uint256 adjustedPrice = (uint256(price) * 1e18) / (10 ** decimals);
         uint256 rawTokenAmount = adjustedUSD / adjustedPrice;
         uint256 tokenAmount = rawTokenAmount / (10 ** (18 - tokenDecimals));
-
-        console.log("price", uint256(price));
-        console.log("adjustedUSD", adjustedUSD);
-        console.log("adjustedPrice", adjustedPrice);
-        console.log("rawTokenAmount", rawTokenAmount);
-        console.log("tokenAmount", tokenAmount);
 
         // note fixed broken
         //   price 29999.00000000
@@ -541,7 +537,7 @@ contract DSCEngine is ReentrancyGuard {
         //   rawTokenAmount .90909090 - note return this if broke
         //   tokenAmount 0 - return this when fixed
 
-        return rawTokenAmount;
+        return tokenAmount;
     }
 
     function getAccountAmountCollateral(

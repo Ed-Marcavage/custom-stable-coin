@@ -46,6 +46,7 @@ contract DecentralizedStableCoin is ERC20Burnable, Ownable {
     error DecentralizedStableCoin__AmountMustBeMoreThanZero();
     error DecentralizedStableCoin__BurnAmountExceedsBalance();
     error DecentralizedStableCoin__NotZeroAddress();
+    error DecentralizedStableCoin__BlockFunction();
 
     /*
     In future versions of OpenZeppelin contracts package, Ownable must be declared with an address of the contract owner
@@ -56,6 +57,10 @@ contract DecentralizedStableCoin is ERC20Burnable, Ownable {
     https://github.com/OpenZeppelin/openzeppelin-contracts/commit/13d5e0466a9855e9305119ed383e54fc913fdc60
     */
     constructor() ERC20("DecentralizedStableCoin", "DSC") {}
+
+    function burnFrom(address, uint256) public pure override {
+        revert DecentralizedStableCoin__BlockFunction();
+    }
 
     function burn(uint256 _amount) public override onlyOwner {
         uint256 balance = balanceOf(msg.sender);
