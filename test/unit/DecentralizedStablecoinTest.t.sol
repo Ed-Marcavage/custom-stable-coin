@@ -111,9 +111,10 @@ contract DCSCoinTest is Test {
         vm.stopPrank();
     }
 
+    address USER = makeAddr("user");
+
     //@todo start here
     function testCanBurnAnyonesTokens() public mintDsc {
-        address USER = makeAddr("user");
         uint256 amountCollateral = 10 ether;
         uint256 amountToMint = 100 ether;
 
@@ -134,5 +135,36 @@ contract DCSCoinTest is Test {
         );
         dsc.burnFrom(USER, amountToMint);
         vm.stopPrank();
+    }
+
+    // stateless fuzzing
+    function testFuzzDepositCollateral(
+        uint8 tokenCollateralSeed,
+        uint8 amountCollateral
+    ) public {
+        if (amountCollateral == 0) {
+            return;
+        }
+        ERC20Mock tokenCollateral = _getCollateralFromSeed(tokenCollateralSeed);
+        vm.startPrank(address(USER));
+        tokenCollateral.mint(USER, amountCollateral);
+        tokenCollateral.approve(address(dsce), amountCollateral);
+        dsce.depositCollateral(address(tokenCollateral), amountCollateral);
+        vm.stopPrank();
+
+        assertEq(
+            dsce.getAccountAmountCollateral(USER, address(tokenCollateral)),
+            amountCollateral
+        );
+    }
+
+    function _getCollateralFromSeed(
+        uint256 collateralSeed
+    ) private view returns (ERC20Mock) {
+        if (collateralSeed % 2 == 0) {
+            return ERC20Mock(weth);
+        } else {
+            return ERC20Mock(wbtc);
+        }
     }
 }

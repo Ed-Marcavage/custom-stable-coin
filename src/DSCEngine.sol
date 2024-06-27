@@ -211,7 +211,7 @@ contract DSCEngine is ReentrancyGuard {
         uint256 amountDscToBurn
     ) external moreThanZero(amountDscToBurn) {
         _burnDsc(amountDscToBurn, msg.sender, msg.sender);
-        revertIfHealthFactorIsBroken(msg.sender); // may not be needed bc reducing debt should increase health factor
+        revertIfHealthFactorIsBroken(msg.sender);
     }
 
     /*
