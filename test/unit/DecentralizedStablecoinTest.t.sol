@@ -167,4 +167,14 @@ contract DCSCoinTest is Test {
             return ERC20Mock(wbtc);
         }
     }
+
+    function testCantSendEth() public {
+        address senderAddress = makeAddr("sender");
+        vm.deal(senderAddress, 1 ether);
+        vm.expectRevert();
+        vm.startPrank(senderAddress);
+        (bool success, ) = address(dsc).call{value: 1 ether}("");
+        require(success);
+        vm.stopPrank();
+    }
 }

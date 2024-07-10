@@ -13,6 +13,8 @@ import {DeployDecentralizedStableCoin} from "../../script/DeployDecentralizedSta
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
+// note
+// fail_on_revert - only care about invariant reverting
 contract Invariants is StdInvariant, Test {
     DeployDecentralizedStableCoin deployDecentralizedStableCoin;
     DecentralizedStableCoin dsc;
